@@ -2,12 +2,14 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
+import requests
+from io import BytesIO
 
 # Configuração da página
 st.set_page_config(page_title="Sistema de Vendas", layout="wide")
 
-# Nome do arquivo para registrar os lançamentos (vendas e despesas)
-SALES_FILE = "vendas_registradas.xlsx"
+# Nome do arquivo para registrar os lançamentos (vendas e despesas) - continua local por enquanto
+SALES_FILE = "vendas_registradas.xlsx" # Este arquivo ainda será salvo localmente para registros
 
 # Funções auxiliares
 def autenticar(usuario, senha):
@@ -21,32 +23,48 @@ def autenticar(usuario, senha):
     }
     return credenciais.get(usuario) == senha
 
-import requests
-from io import BytesIO
+def carregar_dados_google_sheets_lookup():
+    """
+    Carrega os dados de lookup (venda, nomes, area) diretamente de Google Sheets publicados como CSV.
+    VOCÊ PRECISA PUBLICAR CADA ABA DO SEU GOOGLE SHEET COMO CSV E INSERIR AS URLS ABAIXO.
+    """
+    # URLs dos seus Google Sheets publicados como CSV.
+    # Exemplo: https://docs.google.com/spreadsheets/d/e/2PACX-1vR.../pub?gid=123456789&single=true&output=csv
+    # Use o link que você me deu para a aba 'area', se for a aba correta
+    URL_AREA_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSNt8E9Q7Nby2b22C-NPXCzqnREIE95ZEp6YOXq6j801R_NX6RQ5GW1h9TwPbovuw/pub?gid=1705390164&single=true&output=csv"
+    
+    # ATENÇÃO: SUBSTITUA ESTES PLACEHOLDERS PELAS SUAS PRÓPRIAS URLs CSV PUBLICADAS
+    URL_VENDA_CSV = "SUA_URL_CSV_DA_ABA_VENDA_AQUI"   # Exemplo: Cole aqui a URL para a aba 'venda'
+    URL_NOMES_CSV = "SUA_URL_CSV_DA_ABA_NOMES_AQUI"   # Exemplo: Cole aqui a URL para a aba 'nomes'
 
-def carregar_dados_excel_lookup():
-    """
-    Carrega os dados de lookup diretamente do arquivo hospedado no GitHub.
-    """
-    url = "https://github.com/Filipe-Ambrozio/controle_venda/raw/main/vendas.xlsx"
+
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-        excel_data = BytesIO(response.content)
+        st.info("Carregando dados de lookup do Google Sheets...")
+        
+        # Carrega df_venda
+        response_venda = requests.get(URL_VENDA_CSV)
+        response_venda.raise_for_status() # Lança erro para status HTTP ruins
+        df_venda = pd.read_csv(BytesIO(response_venda.content))
 
-        df_venda = pd.read_excel(excel_data, sheet_name="venda")
-        df_nomes = pd.read_excel(excel_data, sheet_name="nomes")
-        df_area = pd.read_excel(excel_data, sheet_name="area")
+        # Carrega df_nomes
+        response_nomes = requests.get(URL_NOMES_CSV)
+        response_nomes.raise_for_status()
+        df_nomes = pd.read_csv(BytesIO(response_nomes.content))
+
+        # Carrega df_area
+        response_area = requests.get(URL_AREA_CSV)
+        response_area.raise_for_status()
+        df_area = pd.read_csv(BytesIO(response_area.content))
+        
+        st.success("Dados de lookup carregados com sucesso!")
         return df_venda, df_nomes, df_area
     except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao baixar o arquivo do GitHub: {e}")
+        st.error(f"Erro ao baixar os dados do Google Sheets. Verifique se as URLs CSV estão corretas e acessíveis: {e}")
         st.stop()
     except Exception as e:
-        st.error(f"Erro ao carregar dados do arquivo Excel: {e}")
-        st.stop() # Parar a execução se o arquivo essencial não for encontrado
-    except Exception as e:
-        st.error(f"Erro ao carregar dados de lookup do 'vendas.xlsx': {e}")
-        st.stop() # Parar a execução em caso de outros erros de leitura
+        st.error(f"Erro ao carregar dados dos arquivos CSV do Google Sheets: {e}")
+        st.stop()
+
 
 def salvar_venda_excel(dados, caminho=SALES_FILE):
     """
@@ -129,7 +147,7 @@ else:
         st.rerun() # Volta para a tela de login
 
     # Carregar dados de lookup (produtos, nomes, áreas) uma vez ao iniciar a sessão autenticada
-    df_venda_lookup, df_nomes_lookup, df_area_lookup = carregar_dados_excel_lookup()
+    df_venda_lookup, df_nomes_lookup, df_area_lookup = carregar_dados_google_sheets_lookup()
 
     # Inicializa estados de sessão para controle da limpeza de campos no formulário de registro
     if 'reset_form' not in st.session_state:
@@ -185,7 +203,7 @@ else:
         
         # Selectbox de Produto
         produto = st.selectbox("Produto", all_products, key='produto_reg', 
-                               index=st.session_state.produto_index)
+                                index=st.session_state.produto_index)
 
         # Lógica condicional para campos de valor/quantidade/tipo com base no produto selecionado
         if produto == "Despesa":
@@ -236,13 +254,13 @@ else:
                 st.write("Selecione um produto e tipo para ver o valor unitário.")
 
             qnt = st.number_input("Quantidade", min_value=1, step=1, key='qnt_reg', 
-                                  value=st.session_state.qnt_value)
+                                    value=st.session_state.qnt_value)
             total = valor_und * qnt
             st.write(f"**Valor Unitário:** R$ {valor_und:.2f}")
             st.write(f"**Total:** R$ {total:.2f}")
             
         status = st.selectbox("Status", ["Pago", "Pendente"], key='status_reg', 
-                              index=st.session_state.status_index)
+                                index=st.session_state.status_index)
         
         data_compra = st.date_input("Data do Lançamento", 
                                     value=st.session_state.data_compra_value, 
@@ -329,7 +347,7 @@ else:
 
             resumo = df_vendas_registradas.groupby(['Ano', 'Mês'])['Total'].sum().reset_index()
             # Filtra anos e meses que não são 0 (ou seja, onde a data da compra era válida e não NaT)
-            resumo = resumo[(resumo['Ano'] != 0) & (resumo['Mês'] != 0)] 
+            resumo = resumo[(resumo['Ano'] != 0) & (resumo['Mês'] != 0)]
             st.subheader("Resumo por mês e ano")
             st.dataframe(resumo)
             st.success(f"Total filtrado: R$ {df_filtrado['Total'].astype(float).sum():.2f}")
@@ -361,9 +379,3 @@ else:
                 st.warning("Índice de lançamento inválido. Por favor, selecione um número de lançamento existente.")
         else:
             st.warning("Nenhum lançamento registrado ainda para imprimir recibo.")
-
-
-
-
-#streamlit run IEAD_controle.py
-
