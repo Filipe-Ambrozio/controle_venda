@@ -1,0 +1,16 @@
+RECIBO DE LANÇAMENTO
+--------------------------------------------------
+Data da Compra: 12/06/2025
+Área: AREA_1
+Congregação: MATRIZ
+Nome: Pr. CÂNDIDO DE FREITAS
+Cargo: PASTOR
+Produto: Despesa
+Tipo: Alimentação
+Valor Unitário: 115.25
+Quantidade: 1
+Total: 115.25
+Status: Pago
+Data do Pagamento: 12/06/2025
+Vendedor: junior
+--------------------------------------------------
