@@ -2,21 +2,17 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
-import gspread
 
 # Configuração da página
 st.set_page_config(page_title="Sistema de Vendas", layout="wide")
 
-# --- Configurações do Google Sheets ---
-# ID da sua planilha Google Sheets (extraído do URL que você forneceu)
-GSHEET_ID = "1u5zQ5H61_clP-9Cihw_JhfQQ4M2DrESp"
-# Nome da aba (worksheet) onde os dados de vendas/despesas serão registrados
-GSHEET_WORKSHEET_NAME = "vendas_registradas"
+# Nome do arquivo para registrar os lançamentos (vendas e despesas)
+SALES_FILE = "vendas_registradas.xlsx"
 
 # Funções auxiliares
 def autenticar(usuario, senha):
     """
-    Função para autenticar usuários no aplicativo.
+    Função para autenticar usuários.
     Retorna True se as credenciais forem válidas, False caso contrário.
     """
     credenciais = {
@@ -25,112 +21,74 @@ def autenticar(usuario, senha):
     }
     return credenciais.get(usuario) == senha
 
-def get_gsheets_client():
-    """
-    Obtém um cliente gspread autenticado usando as credenciais do Streamlit Secrets.
-    """
-    try:
-        # st.secrets["gcp_service_account"] deve conter o conteúdo do JSON da conta de serviço
-        return gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-    except Exception as e:
-        st.error(f"Erro ao autenticar com o Google Sheets. Verifique suas credenciais em .streamlit/secrets.toml e as permissões da conta de serviço. Detalhes: {e}")
-        st.stop() # Interrompe a execução do app se a autenticação falhar
+import requests
+from io import BytesIO
 
 def carregar_dados_excel_lookup():
     """
-    Carrega os dados de lookup (itens de venda, nomes de pessoas, e áreas/congregações)
-    do arquivo 'vendas.xlsx' local. Este arquivo é usado para preencher os selectboxes da UI.
+    Carrega os dados de lookup diretamente do arquivo hospedado no GitHub.
     """
+    url = "https://github.com/Filipe-Ambrozio/controle_venda/raw/main/vendas.xlsx"
     try:
-        df_venda = pd.read_excel("vendas.xlsx", sheet_name="venda")
-        df_nomes = pd.read_excel("vendas.xlsx", sheet_name="nomes")
-        df_area = pd.read_excel("vendas.xlsx", sheet_name="area")
+        response = requests.get(url)
+        response.raise_for_status()
+        excel_data = BytesIO(response.content)
+
+        df_venda = pd.read_excel(excel_data, sheet_name="venda")
+        df_nomes = pd.read_excel(excel_data, sheet_name="nomes")
+        df_area = pd.read_excel(excel_data, sheet_name="area")
         return df_venda, df_nomes, df_area
-    except FileNotFoundError:
-        st.error("Erro: O arquivo 'vendas.xlsx' (com as abas 'venda', 'nomes', 'area') não foi encontrado no diretório do script.")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro ao baixar o arquivo do GitHub: {e}")
+        st.stop()
+    except Exception as e:
+        st.error(f"Erro ao carregar dados do arquivo Excel: {e}")
         st.stop() # Parar a execução se o arquivo essencial não for encontrado
     except Exception as e:
         st.error(f"Erro ao carregar dados de lookup do 'vendas.xlsx': {e}")
         st.stop() # Parar a execução em caso de outros erros de leitura
 
-def salvar_lancamento_gsheets(dados):
+def salvar_venda_excel(dados, caminho=SALES_FILE):
     """
-    Salva os dados de um novo lançamento (venda ou despesa) na planilha do Google Sheets.
-    Cria a aba e os cabeçalhos se não existirem.
+    Salva os dados de um novo lançamento (venda ou despesa) no arquivo Excel especificado.
+    Se o arquivo já existir, lê os dados existentes, anexa os novos dados e reescreve o arquivo.
     """
-    client = get_gsheets_client()
-    try:
-        spreadsheet = client.open_by_key(GSHEET_ID)
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"Erro: Planilha Google Sheets com ID '{GSHEET_ID}' não encontrada ou sem permissão de acesso.")
-        st.stop()
-    except Exception as e:
-        st.error(f"Erro ao abrir a planilha Google Sheets: {e}")
-        st.stop()
+    # Cria um DataFrame temporário com os novos dados
+    df_novo = pd.DataFrame([dados])
+
+    if os.path.exists(caminho):
+        try:
+            # Tenta ler o arquivo Excel existente
+            df_existente = pd.read_excel(caminho)
+            # Concatena o DataFrame existente com o novo DataFrame
+            df_final = pd.concat([df_existente, df_novo], ignore_index=True)
+        except Exception as e:
+            # Se houver um erro ao ler o arquivo existente (ex: corrompido, formato inválido),
+            # emite um aviso e cria um novo arquivo com os dados atuais.
+            st.warning(f"Não foi possível ler o arquivo Excel existente ({caminho}). Criando um novo arquivo com os dados atuais. Erro: {e}")
+            df_final = df_novo # Se a leitura falhar, o DataFrame final será apenas o novo
+    else:
+        # Se o arquivo não existir, o DataFrame final é apenas o novo
+        df_final = df_novo
 
     try:
-        worksheet = spreadsheet.worksheet(GSHEET_WORKSHEET_NAME)
-    except gspread.exceptions.WorksheetNotFound:
-        # Se a aba não existir, cria uma nova com os cabeçalhos
-        st.warning(f"Aba '{GSHEET_WORKSHEET_NAME}' não encontrada. Criando uma nova aba na planilha...")
-        worksheet = spreadsheet.add_worksheet(title=GSHEET_WORKSHEET_NAME, rows="1", cols="1")
-        
-        # Define os cabeçalhos que serão usados no Google Sheet
-        headers = [
-            "Data da Compra", "Área", "Congregação", "Nome", "Cargo",
-            "Produto", "Tipo", "Valor Unitário", "Quantidade", "Total",
-            "Status", "Data do Pagamento", "Vendedor"
-        ]
-        worksheet.append_row(headers) # Adiciona os cabeçalhos na primeira linha
-        st.success(f"Aba '{GSHEET_WORKSHEET_NAME}' criada com sucesso e cabeçalhos adicionados.")
-        
+        # Salva o DataFrame final no arquivo Excel
+        df_final.to_excel(caminho, index=False)
     except Exception as e:
-        st.error(f"Erro ao acessar ou criar a aba '{GSHEET_WORKSHEET_NAME}': {e}")
-        st.stop()
+        st.error(f"Erro ao salvar o lançamento no arquivo Excel: {e}")
 
-    try:
-        # Converte o dicionário de dados em uma lista de valores na ordem dos cabeçalhos
-        # É CRUCIAL que a ordem aqui corresponda à ordem dos cabeçalhos na sua planilha!
-        row_values = [
-            dados.get("Data da Compra", ""),
-            dados.get("Área", ""),
-            dados.get("Congregação", ""),
-            dados.get("Nome", ""),
-            dados.get("Cargo", ""),
-            dados.get("Produto", ""),
-            dados.get("Tipo", ""),
-            dados.get("Valor Unitário", 0.0),
-            dados.get("Quantidade", 0),
-            dados.get("Total", 0.0),
-            dados.get("Status", ""),
-            dados.get("Data do Pagamento", ""),
-            dados.get("Vendedor", "")
-        ]
-        worksheet.append_row(row_values)
-    except Exception as e:
-        st.error(f"Erro ao adicionar os dados à planilha Google Sheets: {e}")
-
-def carregar_lancamentos_gsheets():
+def carregar_vendas_registradas():
     """
-    Carrega todos os lançamentos da planilha do Google Sheets para um DataFrame do Pandas.
+    Carrega os lançamentos registrados do arquivo Excel principal de lançamentos.
     """
-    client = get_gsheets_client()
-    try:
-        spreadsheet = client.open_by_key(GSHEET_ID)
-        worksheet = spreadsheet.worksheet(GSHEET_WORKSHEET_NAME)
-        # Pega todos os registros como uma lista de dicionários (onde as chaves são os cabeçalhos)
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
-        return df
-    except gspread.exceptions.WorksheetNotFound:
-        st.warning(f"Aba '{GSHEET_WORKSHEET_NAME}' não encontrada na planilha. Retornando DataFrame vazio.")
-        return pd.DataFrame()
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"Planilha Google Sheets com ID '{GSHEET_ID}' não encontrada ou sem permissão de acesso.")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Erro ao carregar lançamentos do Google Sheets: {e}")
-        return pd.DataFrame()
+    if os.path.exists(SALES_FILE):
+        try:
+            df_vendas = pd.read_excel(SALES_FILE)
+            return df_vendas
+        except Exception as e:
+            st.error(f"Erro ao carregar lançamentos registrados do '{SALES_FILE}': {e}")
+            return pd.DataFrame() # Retorna um DataFrame vazio em caso de erro
+    return pd.DataFrame() # Retorna um DataFrame vazio se o arquivo não existir
 
 def gerar_recibo_txt(dados, caminho="recibo.txt"):
     """
@@ -320,7 +278,7 @@ else:
                     "Data do Pagamento": data_pagamento.strftime("%d/%m/%Y") if status == "Pago" and data_pagamento else "",
                     "Vendedor": st.session_state.vendedor
                 }
-                salvar_lancamento_gsheets(dados_lancamento) # Salva no Google Sheets
+                salvar_venda_excel(dados_lancamento) # Salva no arquivo de vendas registradas (agora com despesas)
                 gerar_recibo_txt(dados_lancamento)
                 st.success("Lançamento registrado e recibo gerado.")
                 st.session_state.reset_form = True # Sinaliza para resetar os campos no próximo rerun
@@ -328,32 +286,32 @@ else:
 
     elif aba == "Consultar Lançamentos":
         st.title("Consulta de Lançamentos") # Título atualizado para refletir vendas e despesas
-        df_lancamentos = carregar_lancamentos_gsheets() # Carrega do Google Sheets
+        df_vendas_registradas = carregar_vendas_registradas() # Carrega do novo arquivo XLSX
 
-        if not df_lancamentos.empty:
+        if not df_vendas_registradas.empty:
             col1, col2 = st.columns(2)
             with col1:
                 data_ini = st.date_input("Data inicial do lançamento", value=datetime.today(), key='data_ini_consulta')
-                all_recorded_areas = list(df_lancamentos['Área'].unique())
+                all_recorded_areas = list(df_vendas_registradas['Área'].unique())
                 area_filtro = st.multiselect("Área", all_recorded_areas, key='area_filtro_consulta')
             with col2:
                 data_fim = st.date_input("Data final do lançamento", value=datetime.today(), key='data_fim_consulta')
-                congregacao_filtro = st.multiselect("Congregação", df_lancamentos['Congregação'].unique(), key='congregacao_filtro_consulta')
+                congregacao_filtro = st.multiselect("Congregação", df_vendas_registradas['Congregação'].unique(), key='congregacao_filtro_consulta')
 
             # Converte as colunas de data para o tipo datetime, assumindo formato DD/MM/YYYY
             # 'dayfirst=True' é crucial para interpretar "DD/MM/YYYY" corretamente
-            df_lancamentos['Data da Compra'] = pd.to_datetime(df_lancamentos['Data da Compra'], dayfirst=True, errors='coerce')
-            df_lancamentos['Data do Pagamento'] = pd.to_datetime(df_lancamentos['Data do Pagamento'], dayfirst=True, errors='coerce')
+            df_vendas_registradas['Data da Compra'] = pd.to_datetime(df_vendas_registradas['Data da Compra'], dayfirst=True, errors='coerce')
+            df_vendas_registradas['Data do Pagamento'] = pd.to_datetime(df_vendas_registradas['Data do Pagamento'], dayfirst=True, errors='coerce')
 
             # Aplica os filtros com base nas datas e seleções
-            filtro = (df_lancamentos['Data da Compra'] >= pd.to_datetime(data_ini)) & \
-                     (df_lancamentos['Data da Compra'] <= pd.to_datetime(data_fim))
+            filtro = (df_vendas_registradas['Data da Compra'] >= pd.to_datetime(data_ini)) & \
+                     (df_vendas_registradas['Data da Compra'] <= pd.to_datetime(data_fim))
             if area_filtro:
-                filtro &= df_lancamentos['Área'].isin(area_filtro)
+                filtro &= df_vendas_registradas['Área'].isin(area_filtro)
             if congregacao_filtro:
-                filtro &= df_lancamentos['Congregação'].isin(congregacao_filtro)
+                filtro &= df_vendas_registradas['Congregação'].isin(congregacao_filtro)
 
-            df_filtrado = df_lancamentos[filtro].copy()
+            df_filtrado = df_vendas_registradas[filtro].copy()
             
             # Formata as colunas de data de volta para DD/MM/YYYY para exibição no dataframe do Streamlit
             df_filtrado['Data da Compra'] = df_filtrado['Data da Compra'].dt.strftime("%d/%m/%Y")
@@ -366,10 +324,10 @@ else:
 
             # Resumo por mês e ano
             # Garante que as colunas 'Ano' e 'Mês' são criadas a partir das datas válidas
-            df_lancamentos['Ano'] = df_lancamentos['Data da Compra'].dt.year.fillna(0).astype(int)
-            df_lancamentos['Mês'] = df_lancamentos['Data da Compra'].dt.month.fillna(0).astype(int)
+            df_vendas_registradas['Ano'] = df_vendas_registradas['Data da Compra'].dt.year.fillna(0).astype(int)
+            df_vendas_registradas['Mês'] = df_vendas_registradas['Data da Compra'].dt.month.fillna(0).astype(int)
 
-            resumo = df_lancamentos.groupby(['Ano', 'Mês'])['Total'].sum().reset_index()
+            resumo = df_vendas_registradas.groupby(['Ano', 'Mês'])['Total'].sum().reset_index()
             # Filtra anos e meses que não são 0 (ou seja, onde a data da compra era válida e não NaT)
             resumo = resumo[(resumo['Ano'] != 0) & (resumo['Mês'] != 0)] 
             st.subheader("Resumo por mês e ano")
@@ -380,19 +338,19 @@ else:
 
     elif aba == "Imprimir Recibo":
         st.title("Impressão de Recibo")
-        df_lancamentos = carregar_lancamentos_gsheets() # Carrega do Google Sheets
+        df_vendas_registradas = carregar_vendas_registradas() # Carrega do novo arquivo XLSX
 
-        if not df_lancamentos.empty:
+        if not df_vendas_registradas.empty:
             # Garante que o valor máximo do number_input seja válido
-            max_lancamento_id = len(df_lancamentos) - 1
-            if max_lancamento_id < 0: # Caso não haja lançamentos, ajusta para 0 para evitar erro
-                max_lancamento_id = 0
+            max_venda_id = len(df_vendas_registradas) - 1
+            if max_venda_id < 0: # Caso não haja lançamentos, ajusta para 0 para evitar erro
+                max_venda_id = 0
             
-            lancamento_id = st.number_input("Número do lançamento (linha no arquivo)", min_value=0, max_value=max_lancamento_id, step=1, key='lancamento_id_recibo')
+            venda_id = st.number_input("Número do lançamento (linha no arquivo)", min_value=0, max_value=max_venda_id, step=1, key='venda_id_recibo')
             
             # Garante que o índice selecionado é válido antes de tentar acessar o DataFrame
-            if len(df_lancamentos) > lancamento_id >= 0: 
-                dados = df_lancamentos.iloc[lancamento_id].to_dict()
+            if len(df_vendas_registradas) > venda_id >= 0: 
+                dados = df_vendas_registradas.iloc[venda_id].to_dict()
                 gerar_recibo_txt(dados)
                 st.write("Recibo gerado:")
                 with open("recibo.txt", "r", encoding="utf-8") as f:
@@ -403,3 +361,9 @@ else:
                 st.warning("Índice de lançamento inválido. Por favor, selecione um número de lançamento existente.")
         else:
             st.warning("Nenhum lançamento registrado ainda para imprimir recibo.")
+
+
+
+
+#streamlit run IEAD_controle.py
+
