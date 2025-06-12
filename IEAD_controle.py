@@ -21,18 +21,28 @@ def autenticar(usuario, senha):
     }
     return credenciais.get(usuario) == senha
 
+import requests
+from io import BytesIO
+
 def carregar_dados_excel_lookup():
     """
-    Carrega os dados de lookup (itens de venda, nomes de pessoas, e áreas/congregações)
-    do arquivo 'vendas.xlsx'. Este arquivo é usado para preencher os selectboxes da UI.
+    Carrega os dados de lookup diretamente do arquivo hospedado no GitHub.
     """
+    url = "https://github.com/Filipe-Ambrozio/controle_venda/raw/main/vendas.xlsx"
     try:
-        df_venda = pd.read_excel("vendas.xlsx", sheet_name="venda")
-        df_nomes = pd.read_excel("vendas.xlsx", sheet_name="nomes")
-        df_area = pd.read_excel("vendas.xlsx", sheet_name="area")
+        response = requests.get(url)
+        response.raise_for_status()
+        excel_data = BytesIO(response.content)
+
+        df_venda = pd.read_excel(excel_data, sheet_name="venda")
+        df_nomes = pd.read_excel(excel_data, sheet_name="nomes")
+        df_area = pd.read_excel(excel_data, sheet_name="area")
         return df_venda, df_nomes, df_area
-    except FileNotFoundError:
-        st.error("Erro: O arquivo 'vendas.xlsx' (com as abas 'venda', 'nomes', 'area') não foi encontrado no diretório do script.")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro ao baixar o arquivo do GitHub: {e}")
+        st.stop()
+    except Exception as e:
+        st.error(f"Erro ao carregar dados do arquivo Excel: {e}")
         st.stop() # Parar a execução se o arquivo essencial não for encontrado
     except Exception as e:
         st.error(f"Erro ao carregar dados de lookup do 'vendas.xlsx': {e}")
